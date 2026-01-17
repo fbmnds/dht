@@ -1,5 +1,5 @@
 (import (chicken foreign))
-(import miscmacros)
+;;(import miscmacros)
 
 ;; riscv-csc-options
 ;; riscv-csc -L -lgpiod -I. -o run-dht dht.scm dht.c
@@ -11,15 +11,15 @@
 (define dht
   (foreign-lambda int "dht" int (c-pointer float) (c-pointer float)))
 
-(define tries 5)
+;;(define tries 5)
 (define GPIOPin 17)
-(define r -1)
+(define r 0)
 
 (let-location
  ([t float] [h float])
- (while (and (> tries 0)(< r 0))
+ ;;(while (and (> tries 0)(< r 0))
         (set! r (dht GPIOPin (location h) (location t)))
-        (set! tries (- tries 1)))
+ ;;       (set! tries (- tries 1)))
  (if (zero? r)
      (print "t = " t " h = " h)
      (print "errno " r)))

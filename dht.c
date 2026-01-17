@@ -43,108 +43,150 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //#define DEBUG
 
 /* The pin you have the sensor hanging off. */
-#define DHT11_PIN 17
+#define DHT_PIN 17
 
-#define DHT11_OK              0
-#define DHT11_ERROR_ARG       -1
-#define DHT11_ERROR_CHECKSUM  -2
-#define DHT11_ERROR_TIMEOUT   -3
+#define DHT_OK              0
+#define DHT_ERROR_ARG       -1
+#define DHT_ERROR_CHECKSUM  -2
+#define DHT_ERROR_TIMEOUT   -3
+#define DHT_ERROR_GPIOCHIP  -4
+#define DHT_ERROR_GPIOLINE  -5
 
 /** 
  * How long to spin, waiting for input.
  */
-#define DHT11_MAXCOUNT 64000
+#define DHT_MAXCOUNT 64000
 
 /**
  * Number of bit pulses to expect from the DHT.  Note that this is 41 because
  * the first pulse is a constant 50 microsecond pulse, with 40 pulses to
  * represent the data afterwards.
  */
-#define DHT11_PULSES	41
+#define DHT_PULSES	41
+
+struct gpiod_chip *chip;
+struct gpiod_line *gpioPin;
+const char *chipname = "gpiochip0";
+
+int dht_init(int pin)
+{
+  int err=0;
+  // Re-use/open GPIO chip
+  if (!chip) {
+    chip = gpiod_chip_open_by_name(chipname);
+    if (!chip) {
+      fprintf(stdout, "Open chip failed");
+      return DHT_ERROR_GPIOCHIP;
+    }
+  }
+ 
+  // Re-/open GPIO line
+  if (!gpioPin) {
+    gpioPin = gpiod_chip_get_line(chip, pin);
+    if (!gpioPin) {
+      fprintf(stdout, "Cannot get line with name: GPIO%d\n", pin);
+      gpiod_chip_close(chip);
+      return DHT_ERROR_GPIOLINE;
+    }
+    err = gpiod_line_request_output(gpioPin, "DHT", 1);
+    if (err<0) {
+      fprintf(stdout, "Cannot reserve line with name: GPIO%d\n", pin);
+      gpiod_line_release(gpioPin);
+      gpiod_chip_close(chip);
+      return DHT_ERROR_GPIOLINE;
+    }
+  }
+  
+  return DHT_OK;
+}
+
+void dht_close()
+{
+  // Release lines and chip
+  gpiod_line_release(gpioPin);
+  gpiod_chip_close(chip);
+}
 
 int dht(int pin, float *humidity, float *temperature)
 {
+  int err=0, tries=5;
+  float f=0.f;
+  /* Array to store length of low and high pulses from the sensor */
+  int pulse, pulseWidths[DHT_PULSES*2] = {0};
+  uint32_t count = 0;
 
+  uint8_t bytes[5];
+  uint8_t bit;
 
-  const char *chipname = "gpiochip0";
-  struct gpiod_chip *chip;
-  struct gpiod_line *gpioPin;
-  int i, val;
 
   /* Make sure output pointers are probably ok */
   if (humidity == NULL || temperature == NULL ) {
-    return DHT11_ERROR_ARG;
+    return DHT_ERROR_ARG;
   }
+  
+  if (!chip) {
+    err = dht_init(pin);
+    if (err<0) {
+      return err;
+    }
+  }
+
+
+ start:
+  err = 0;
 
   *humidity = 0.0f;
   *temperature = 0.0f;
-  float f=0.f;
-  
-  /* Array to store length of low and high pulses from the sensor */
-  int pulseWidths[DHT11_PULSES*2] = {0};
 
   /* Signal sensor to output it's data. High for ~500ms then low for ~20ms */
-  // Open GPIO chip
-  chip = gpiod_chip_open_by_name(chipname);
-  if (!chip) {
-    fprintf(stdout, "Open chip failed");
-    return -1;
-  }
- 
-  // Open GPIO line
-  gpioPin = gpiod_chip_get_line(chip, pin);
-  if (!gpioPin) {
-    fprintf(stdout, "Cannot find line with name: GPIO%d\n", pin);
-    gpiod_chip_close(chip);
-    return -1;
-  }
-
   // pinMode(pin, OUTPUT);
   // digitalWrite(pin, HIGH);
-  gpiod_line_request_output(gpioPin, "dht",1);
-  gpiod_line_set_value(gpioPin,1);
+  gpiod_line_set_direction_output(gpioPin,1);
+  //gpiod_line_set_value(gpioPin,1);
   usleep(500000);
   // digitalWrite(pin, LOW);
   gpiod_line_set_value(gpioPin,0);
   usleep(20000);
-
   /* Time the pulses coming in */
   gpiod_line_set_direction_input(gpioPin);
   /* Tiny delay to let pin stabilise as input pin and let voltage come up */
-  for( volatile int i=0; i<500; i++);
+  for( volatile int i=0; i<25; i++);
 
   /* Wait for HIGH->LOW edge */
-  uint32_t count = 0;
+  count = 0;
   while (gpiod_line_get_value(gpioPin)) {
-    if (++count > DHT11_MAXCOUNT) {
-      return DHT11_ERROR_TIMEOUT;
+    if (++count > DHT_MAXCOUNT) {
+      err=DHT_ERROR_TIMEOUT;
+      goto error;
     }
   }
 
   /* Record pulse widths */
-  int pulse=0;
-  while (pulse < DHT11_PULSES*2) {
+  pulse=0;
+  while (pulse < DHT_PULSES*2) {
     /* Time low */
     while (!gpiod_line_get_value(gpioPin)) {
-      if (++pulseWidths[pulse] > DHT11_MAXCOUNT) {
-        return DHT11_ERROR_TIMEOUT;
+      if (++pulseWidths[pulse] > DHT_MAXCOUNT) {
+        err=DHT_ERROR_TIMEOUT;
+        goto error;
       }
     }
     ++pulse;
     /* Time high */
     while (gpiod_line_get_value(gpioPin)) {
-      if (++pulseWidths[pulse] > DHT11_MAXCOUNT) {
-        return DHT11_ERROR_TIMEOUT;
+      if (++pulseWidths[pulse] > DHT_MAXCOUNT) {
+        err=DHT_ERROR_TIMEOUT;
+        goto error;
       }
     }
     ++pulse;
   }
 
   /* Convert pulse widths to bits and bytes */
-  uint8_t bytes[5] = {0};
-  uint8_t bit = 0;
+  for (int i=0;i<5;i++) { bytes[i] = 0; }
+  bit = 0;
   pulse = 2; /* Skip over initial bit */
-  while (pulse < DHT11_PULSES*2) {
+  while (pulse < DHT_PULSES*2) {
 #ifdef DEBUG
     printf( 
            "Bit: %2d Byte: %2d Low: %3d High: %3d -> %1d  = 0x%2x\n", 
@@ -180,38 +222,42 @@ int dht(int pin, float *humidity, float *temperature)
           bytes[4],
           ((bytes[0] + bytes[1] + bytes[2] + bytes[3]) & 0xff)
           );
-
-  /* If debugging, set outputs regardless of checksum validity */
-  *humidity = (float)bytes[0];
-  *temperature = (float)bytes[2];
-  f = ((int)(bytes[2] & 0x7F)) << 8 | bytes[3];
-  f *= 0.1;
-  *temperature = f;
 #endif
-
-  /* Check the checksum */
-  if (bytes[4] != ((bytes[0] + bytes[1] + bytes[2] + bytes[3]) & 0xff)) {
-    return DHT11_ERROR_CHECKSUM;
-  }
-
-  /* All good, put the data in the vars :-) */
+  
   f = ((int)bytes[0]) << 8 | bytes[1];
   f *= 0.1;
   *humidity = f;
-  //*humidity = (float)bytes[0];
-  //*temperature = (float)bytes[2];
   f = ((int)(bytes[2] & 0x7F)) << 8 | bytes[3];
   f *= 0.1;
   if (bytes[2] & 0x80 ){
     f *= -1;}
   *temperature = f;
 
-  //  gpiod_line_set_value(gpioPin,0);
-  // Release lines and chip
-  gpiod_line_release(gpioPin);
-  gpiod_chip_close(chip);
-  
-  return DHT11_OK;
+  /* Check the checksum */
+  if (bytes[4] != ((bytes[0] + bytes[1] + bytes[2] + bytes[3]) & 0xff)) {
+    /* If debugging, keep outputs regardless of checksum validity */
+#ifndef DEBUG
+    *humidity = -1;
+    *temperature = -1;
+#endif
+    err=DHT_ERROR_CHECKSUM;
+    goto error;
+  }
+
+
+ error:
+    if (err<0) {
+      if (tries>0) {
+        tries--;
+        goto start;
+      } else {
+        dht_close();
+        return err;
+      }
+    } else {
+      dht_close();
+      return DHT_OK;
+    }
 }
 
 
@@ -225,14 +271,14 @@ void main()
   int tries;
 
   for (tries = 3; tries > 0; --tries) {
-    int ret = dht11_read( DHT11_PIN, &humidity, &temperature);
-    if (ret == DHT11_OK ) {
+    int ret = dht11_read( DHT_PIN, &humidity, &temperature);
+    if (ret == DHT_OK ) {
       printf("Humidity: %2.0f%% RH, Temperature: %2.0f° C\n",
           humidity,
           temperature);
       break;
     }
-    else if (ret == DHT11_ERROR_CHECKSUM) {
+    else if (ret == DHT_ERROR_CHECKSUM) {
       puts("Checksum error.");
     }
     else {
