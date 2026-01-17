@@ -260,33 +260,3 @@ int dht(int pin, float *humidity, float *temperature)
     }
 }
 
-
-/*
-void main()
-{
-  float humidity, temperature;
-
-  //wiringPiSetup();
-
-  int tries;
-
-  for (tries = 3; tries > 0; --tries) {
-    int ret = dht11_read( DHT_PIN, &humidity, &temperature);
-    if (ret == DHT_OK ) {
-      printf("Humidity: %2.0f%% RH, Temperature: %2.0f° C\n",
-          humidity,
-          temperature);
-      break;
-    }
-    else if (ret == DHT_ERROR_CHECKSUM) {
-      puts("Checksum error.");
-    }
-    else {
-      puts("Timeout.");
-    }
-  }
-  if (tries == 0) {
-    puts("Ran out of tries.");
-  }
-}
-*/

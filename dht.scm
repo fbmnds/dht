@@ -1,4 +1,5 @@
 (import (chicken foreign))
+(import fmt)
 ;;(import miscmacros)
 
 ;; riscv-csc-options
@@ -21,5 +22,8 @@
         (set! r (dht GPIOPin (location h) (location t)))
  ;;       (set! tries (- tries 1)))
  (if (zero? r)
-     (print "t = " t " h = " h)
+     (print "t = "
+            (fmt #f (num t 10 1))
+            " h = "
+            (fmt #f (num h 10 1)))
      (print "errno " r)))
