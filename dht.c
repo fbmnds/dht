@@ -37,7 +37,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <stdio.h>
 #include <stdint.h>
 #include <errno.h>
-#include <time.h>
+#include <unistd.h>
 
 
 //#define DEBUG
@@ -131,6 +131,7 @@ int dht(int pin, float *humidity, float *temperature)
     }
   }
 
+  usleep(5000);
 
  start:
   err = 0;
@@ -138,15 +139,16 @@ int dht(int pin, float *humidity, float *temperature)
   *humidity = 0.0f;
   *temperature = 0.0f;
 
+  //usleep(5000);
   /* Signal sensor to output it's data. High for ~500ms then low for ~20ms */
   // pinMode(pin, OUTPUT);
   // digitalWrite(pin, HIGH);
-  gpiod_line_set_direction_output(gpioPin,1);
+  gpiod_line_set_direction_output(gpioPin,0);
   //gpiod_line_set_value(gpioPin,1);
-  usleep(500000);
+  usleep(550);
   // digitalWrite(pin, LOW);
-  gpiod_line_set_value(gpioPin,0);
-  usleep(20000);
+  gpiod_line_set_value(gpioPin,1);
+  usleep(20);
   /* Time the pulses coming in */
   gpiod_line_set_direction_input(gpioPin);
   /* Tiny delay to let pin stabilise as input pin and let voltage come up */
@@ -159,6 +161,7 @@ int dht(int pin, float *humidity, float *temperature)
       err=DHT_ERROR_TIMEOUT;
       goto error;
     }
+    //for( volatile int i=0; i<5; i++);
   }
 
   /* Record pulse widths */
@@ -246,6 +249,7 @@ int dht(int pin, float *humidity, float *temperature)
 
 
  error:
+    gpiod_line_set_direction_output(gpioPin,1);
     if (err<0) {
       if (tries>0) {
         tries--;
